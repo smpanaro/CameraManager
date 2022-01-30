@@ -806,10 +806,12 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
         
         qrCodeDetectionHandler = handler
         captureSession.addOutput(output)
-        
+
         // Note: The object types must be set after the output was added to the capture session.
         output.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
         output.metadataObjectTypes = [.qr, .ean8, .ean13, .pdf417].filter { output.availableMetadataObjectTypes.contains($0) }
+
+        qrOutput = output
     }
     
     /**
@@ -840,7 +842,75 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     open func deviceOrientationMatchesInterfaceOrientation() -> Bool {
         return deviceOrientation == UIDevice.current.orientation
     }
-    
+
+    /**
+     Data relating to the the current captured frame.
+     The current frame's sample buffer and the transform to apply so it matches the preview.
+     */
+    public struct CapturedFrame {
+        let frame: CMSampleBuffer
+        let previewTransforms: Transforms
+
+        /**
+         Defines the necessary transforms to make this buffer match the preview.
+         */
+        public struct Transforms {
+            let flipX: Bool
+            let rotation: Double
+
+            static let none = Transforms(flipX: false, rotation: 0)
+        }
+    }
+
+    /**
+     The signature for a handler.
+     */
+    public typealias FrameCaptureHandler = (Result<CapturedFrame, Error>) -> Void
+
+    /**
+     Start capturing frames.
+     */
+    open func startFrameCapture(_ handler: @escaping FrameCaptureHandler) {
+        guard let captureSession = self.captureSession
+            else { return }
+
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [String(kCVPixelBufferPixelFormatTypeKey): kCMPixelFormat_32BGRA]
+        output.alwaysDiscardsLateVideoFrames = true
+
+        guard captureSession.canAddOutput(output)
+            else { return }
+
+        frameCaptureHandler = handler
+
+        output.setSampleBufferDelegate(self, queue: .global(qos: .userInitiated))
+        captureSession.addOutput(output)
+
+        frameCaptureOutput = output
+    }
+
+    /**
+     Stop capturing frames.
+     */
+    open func stopFrameCapture() {
+        frameCaptureHandler = nil
+
+        if let output = frameCaptureOutput {
+            captureSession?.removeOutput(output)
+        }
+        frameCaptureOutput = nil
+    }
+
+    /**
+     The stored handler for frame capture.
+     */
+    private var frameCaptureHandler: FrameCaptureHandler?
+
+    /**
+     The stored frame capture output; used to handle new frames in real-time.
+     */
+    private var frameCaptureOutput: AVCaptureOutput?
+
     /**
      Current camera status.
      
@@ -1255,12 +1325,9 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
         movieOutput = newMovieOutput
         
         _setupVideoConnection()
-        
-        if let captureSession = captureSession, captureSession.canAddOutput(newMovieOutput) {
-            captureSession.beginConfiguration()
-            captureSession.addOutput(newMovieOutput)
-            captureSession.commitConfiguration()
-        }
+
+        // Defer adding the movie output until it is needed since it
+        // can conflict with the frame capture output.
     }
     
     fileprivate func _setupVideoConnection() {
@@ -1290,12 +1357,9 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
         }
         let newStillImageOutput = AVCaptureStillImageOutput()
         stillImageOutput = newStillImageOutput
-        if let captureSession = captureSession,
-            captureSession.canAddOutput(newStillImageOutput) {
-            captureSession.beginConfiguration()
-            captureSession.addOutput(newStillImageOutput)
-            captureSession.commitConfiguration()
-        }
+
+        // Defer adding the image output until it is needed.
+
         return newStillImageOutput
     }
     
@@ -2135,5 +2199,45 @@ extension CameraManager: AVCaptureMetadataOutputObjectsDelegate {
             else { return }
         
         handler(.success(stringValue))
+    }
+}
+
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    /**
+        Called when a new frame is written.
+     */
+    public func captureOutput(_ output: AVCaptureOutput,
+                      didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        // Check if there is a registered handler.
+        guard let handler = frameCaptureHandler else { return }
+
+        let previewTransforms = connection.transformsToMatch(previewLayer?.connection) ?? .none
+        handler(.success(CapturedFrame(frame: sampleBuffer, previewTransforms: previewTransforms)))
+    }
+}
+
+extension AVCaptureConnection {
+    func transformsToMatch(_ target: AVCaptureConnection?) -> CameraManager.CapturedFrame.Transforms? {
+        guard let target = target else { return nil }
+
+        let flipX = target.isVideoMirrored != isVideoMirrored
+
+        var rotation: Double = 0
+        switch (videoOrientation) {
+        // TODO: Support other combinations if needed.
+        case .landscapeRight:
+            switch (target.videoOrientation) {
+            case .portrait: rotation = .pi / 2
+            case .portraitUpsideDown: rotation = -.pi / 2
+            case .landscapeLeft: rotation = -.pi
+            case .landscapeRight: rotation = 0
+            @unknown default: rotation = 0
+            }
+        default:
+            print("Unsupported video orientation: \(videoOrientation.rawValue), ignoring rotation.")
+        }
+
+        return .init(flipX: flipX, rotation: rotation)
     }
 }
