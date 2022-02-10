@@ -1545,7 +1545,9 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     
     fileprivate func _startFollowingDeviceOrientation() {
         if shouldRespondToOrientationChanges, !cameraIsObservingDeviceOrientation {
-            coreMotionManager = CMMotionManager()
+            if (coreMotionManager == nil) {
+                coreMotionManager = CMMotionManager()
+            }
             coreMotionManager.deviceMotionUpdateInterval = 1 / 30.0
             if coreMotionManager.isDeviceMotionAvailable {
                 coreMotionManager.startDeviceMotionUpdates(to: OperationQueue()) { motion, _ in
