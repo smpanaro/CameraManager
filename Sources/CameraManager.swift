@@ -341,8 +341,8 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     fileprivate weak var embeddingView: UIView?
     fileprivate var videoCompletion: ((_ videoURL: URL?, _ error: NSError?) -> Void)?
     
-    fileprivate var sessionQueue: DispatchQueue = DispatchQueue(label: "CameraSessionQueue", attributes: [])
-    
+    fileprivate var sessionQueue: DispatchQueue = DispatchQueue(label: "CameraManager.SessionQueue", qos: .userInitiated)
+
     fileprivate lazy var frontCameraDevice: AVCaptureDevice? = {
         AVCaptureDevice.videoDevices.filter { $0.position == .front }.first
     }()
@@ -465,6 +465,7 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
         if let validCaptureSession = captureSession {
             if !validCaptureSession.isRunning, cameraIsSetup {
                 sessionQueue.async {
+                    assert(self.configCount == 0)
                     validCaptureSession.startRunning()
                     self._startFollowingDeviceOrientation()
                 }
@@ -949,12 +950,12 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     // MARK: - AVCaptureFileOutputRecordingDelegate
     
     public func fileOutput(_: AVCaptureFileOutput, didStartRecordingTo _: URL, from _: [AVCaptureConnection]) {
-        captureSession?.beginConfiguration()
+        beginConfig()
         if flashMode != .off {
             _updateIlluminationMode(flashMode)
         }
         
-        captureSession?.commitConfiguration()
+        commitConfig()
     }
     
     open func fileOutput(_: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from _: [AVCaptureConnection], error: Error?) {
@@ -1524,15 +1525,16 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
         
         sessionQueue.async {
             if let validCaptureSession = self.captureSession {
-                validCaptureSession.beginConfiguration()
+                self.beginConfig()
                 validCaptureSession.sessionPreset = AVCaptureSession.Preset.high
                 self._updateCameraDevice(self.cameraDevice)
                 self._setupOutputs()
                 self._setupOutputMode(self.cameraOutputMode, oldCameraOutputMode: nil)
                 self._setupPreviewLayer()
-                validCaptureSession.commitConfiguration()
+                self.commitConfig()
                 self._updateIlluminationMode(self.flashMode)
                 self._updateCameraQualityMode(self.cameraOutputQuality)
+                assert(self.configCount == 0)
                 validCaptureSession.startRunning()
                 self._startFollowingDeviceOrientation()
                 self.cameraIsSetup = true
@@ -1638,7 +1640,7 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     }
     
     fileprivate func _setupOutputMode(_ newCameraOutputMode: CameraOutputMode, oldCameraOutputMode: CameraOutputMode?) {
-        captureSession?.beginConfiguration()
+        beginConfig()
         
         if let cameraOutputToRemove = oldCameraOutputMode {
             // remove current setting
@@ -1679,7 +1681,7 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
                     captureSession?.addInput(validMic)
             }
         }
-        captureSession?.commitConfiguration()
+        commitConfig()
         _updateCameraQualityMode(cameraOutputQuality)
         _orientationChanged()
     }
@@ -1858,8 +1860,8 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     
     fileprivate func _updateCameraDevice(_: CameraDevice) {
         if let validCaptureSession = captureSession {
-            validCaptureSession.beginConfiguration()
-            defer { validCaptureSession.commitConfiguration() }
+            beginConfig()
+            defer { commitConfig() }
             let inputs: [AVCaptureInput] = validCaptureSession.inputs
             
             for input in inputs {
@@ -1894,8 +1896,8 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     }
     
     fileprivate func _updateTorch(_: CameraFlashMode) {
-        captureSession?.beginConfiguration()
-        defer { captureSession?.commitConfiguration() }
+        beginConfig()
+        defer { commitConfig() }
         for captureDevice in AVCaptureDevice.videoDevices {
             guard let avTorchMode = AVCaptureDevice.TorchMode(rawValue: flashMode.rawValue) else { continue }
             if captureDevice.isTorchModeSupported(avTorchMode), cameraDevice == .back {
@@ -1913,8 +1915,8 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     }
     
     fileprivate func _updateFlash(_ flashMode: CameraFlashMode) {
-        captureSession?.beginConfiguration()
-        defer { captureSession?.commitConfiguration() }
+        beginConfig()
+        defer { commitConfig() }
         for captureDevice in AVCaptureDevice.videoDevices {
             guard let avFlashMode = AVCaptureDevice.FlashMode(rawValue: flashMode.rawValue) else { continue }
             if captureDevice.isFlashModeSupported(avFlashMode) {
@@ -1968,9 +1970,9 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
             }
             
             if validCaptureSession.canSetSessionPreset(sessionPreset) {
-                validCaptureSession.beginConfiguration()
+                beginConfig()
                 validCaptureSession.sessionPreset = sessionPreset
-                validCaptureSession.commitConfiguration()
+                commitConfig()
             } else {
                 _show(NSLocalizedString("Preset not supported", comment: ""), message: NSLocalizedString("Camera preset not supported. Please try another one.", comment: ""))
             }
@@ -2006,6 +2008,40 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
         } catch let outError {
             _show(NSLocalizedString("Device setup error occured", comment: ""), message: "\(outError)")
             return nil
+        }
+    }
+
+
+    var configCount = 0
+    func beginConfig() {
+        #if DEBUG
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        #endif
+
+        configCount += 1
+        if let captureSession = captureSession {
+            captureSession.beginConfiguration()
+        }
+        else {
+            #if DEBUG
+            print("odd call to beginconfig")
+            #endif
+        }
+    }
+
+    func commitConfig() {
+        #if DEBUG
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        #endif
+
+        configCount -= 1
+        if let captureSession = captureSession {
+            captureSession.commitConfiguration()
+        }
+        else {
+            #if DEBUG
+            print("odd call to commitconfig")
+            #endif
         }
     }
     
