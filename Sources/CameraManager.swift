@@ -110,7 +110,7 @@ public enum CaptureError: Error {
 /// Class for handling iDevices custom camera usage
 open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGestureRecognizerDelegate {
     // MARK: - Public properties
-    
+
     // Property for custom image album name.
     open var imageAlbumName: String?
     
@@ -119,7 +119,7 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
     
     /// Property for capture session to customize camera settings.
     open var captureSession: AVCaptureSession?
-    
+
     /**
      Property to determine if the manager should show the error for the user. If you want to show the errors yourself set this to false. If you want to add custom error UI set showErrorBlock property.
      - note: Default value is **false**
@@ -848,8 +848,8 @@ open class CameraManager: NSObject, AVCaptureFileOutputRecordingDelegate, UIGest
      The current frame's sample buffer and the transform to apply so it matches the preview.
      */
     public struct CapturedFrame {
-        let frame: CMSampleBuffer
-        let previewTransforms: Transforms
+        public let buffer: CMSampleBuffer
+        public let previewTransforms: Transforms
 
         /**
          Defines the necessary transforms to make this buffer match the preview.
@@ -2213,7 +2213,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let handler = frameCaptureHandler else { return }
 
         let previewTransforms = connection.transformsToMatch(previewLayer?.connection) ?? .none
-        handler(.success(CapturedFrame(frame: sampleBuffer, previewTransforms: previewTransforms)))
+        handler(.success(CapturedFrame(buffer: sampleBuffer, previewTransforms: previewTransforms)))
     }
 }
 
